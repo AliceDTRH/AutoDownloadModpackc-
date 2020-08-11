@@ -1,203 +1,222 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
-using System.Net;
-using System.Net.Http;
-using Newtonsoft.Json.Linq;
+using CSHash.Digests;
+using ResilientDownloadLib;
+using LightningBug.Polly;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Bson;
-using Newtonsoft.Json.Converters;
-using Newtonsoft.Json.Serialization;
-using System.IO;
-using System.Security.Cryptography;
-using MonkeyCache;
-using MonkeyCache.LiteDB;
+using Downloader;
+using System.Net;
+using System.Reflection;
+using System.Diagnostics;
 
 namespace AutoDownloadModpack
 {
-    static class Program
+    class Program
     {
-        // {63B564D5-B247-481A-9790-4BB8A3A4335A}
-        public static readonly Guid guid = System.Guid.Parse("63B564D5-B247-481A-9790-4BB8A3A4335A");
+        private const string LocalPath = "./profile";
+        private const string host = "https://alicedtrh.xyz/";
+        private static int finished;
+        private static int publiccount = 1000;
 
-        static readonly public HttpClient client = new HttpClient();
-        static readonly string path = Path.GetFullPath("./profile/");
-
-        static readonly public string host = "https://launcher.alicedtrh.xyz/";
-        internal static readonly string database = Path.GetFullPath("./launcherdb/");
-        internal static int runningDownloads;
-        internal static Random rnd = new Random();
-
-        static async Task Main(string[] args)
+        static  DownloadService downloader = new DownloadService(downloadOpt);
+        private static Dictionary<string, Uri> origRemoteFileList = new Dictionary<string, Uri>();
+        static readonly DownloadConfiguration downloadOpt = new DownloadConfiguration()
         {
-            Barrel.ApplicationId = "alicedtrhadm";
-            BarrelUtils.SetBaseCachePath("./launcherdata");
+            MaxTryAgainOnFailover = int.MaxValue, // the maximum number of times to fail.
+            ParallelDownload = true, // download parts of file as parallel or not default value is false
+            ChunkCount = 4, // file parts to download, default value is 1
+            Timeout = 1000, // timeout (millisecond) per stream block reader, default valuse is 1000
+            OnTheFlyDownload = false, // caching in-memory or not? default valuse is true
+            RequestConfiguration = // config and customize request headers
+    {
+        Accept = "*/*",
+        UserAgent = $"ResilientDownloadLib/{Assembly.GetExecutingAssembly().GetName().Version.ToString(3)}",
+        ProtocolVersion = HttpVersion.Version11,
+        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+        KeepAlive = false,
+        UseDefaultCredentials = false
+    }
+        };
 
-            await ConfirmGuid();
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2008:Do not create tasks without passing a TaskScheduler", Justification = "<Pending>")]
+        public async static Task Main()
+        {
+            Modpack modpack = new Modpack();
 
-            var down = await DownloadTextFile(host + "generateModList.php?v=" + Properties.Settings.Default.Version);
-            dynamic fileList = JObject.Parse(down) as dynamic;
-            float version = fileList.Version;
-            Console.WriteLine("Checking for mods to download.");
-            if (fileList.AmountOfMods > 0)
-            {
-                List<Task> mods = new List<Task>();
-                foreach (var mod in fileList.FileList)
-                {
-                    Mod thisMod = new Mod(path);
-                    //Console.WriteLine(path + mod.path);
-                    thisMod.Path = mod.path;
-                    thisMod.Sha1 = mod.sha1;
-                    if (mod.purge == Properties.Settings.Default.Version) {
-                        thisMod.Purge = true;
-                    }
-                    Task PM;
-                    if (mod.conf != null && mod.conf == true)
-                    {
-                        PM = ProcessMod(thisMod, true);
-                    }
-                    else {
-                        PM = ProcessMod(thisMod);
-                    }
+            Dictionary<string, string> remoteDict = new Dictionary<string, string>();
+            Dictionary<string, string> localDict = new Dictionary<string, string>();
 
-                    mods.Add(PM);
+            Dictionary<string, string> diffDict = new Dictionary<string, string>();
 
-                }
-                await Task.WhenAll(mods);
-                Console.WriteLine("Done!");
+            Task<Dictionary<string, string>> remoteTask = Task.Run(GetRemoteFilelistFromServer);
+
+            List<Task> tasks = new List<Task>();
+
+            Task<Dictionary<string, string>> localTask = Task.Run(GenerateLocalFileList);
+            tasks.Add(remoteTask.ContinueWith(async (t) => { remoteDict = await t.ConfigureAwait(false); }));
+            tasks.Add(localTask.ContinueWith(async (t) => { localDict = await t.ConfigureAwait(false); }));
             
+            while (finished < publiccount)
+            {
                 
+                Logger.Log(finished + "/" + publiccount).FireAndForget();
+                await Task.Delay(100).ConfigureAwait(false);
             }
-            else
+            Logger.Log(finished + "/" + publiccount).FireAndForget();
+
+            await Task.WhenAll(tasks.ToArray()).ConfigureAwait(false);
+
+            List<Task> diffTasks = new List<Task>();
+
+            foreach (var item in remoteDict)
             {
-                Console.WriteLine("No mods listed in file.");
+                diffTasks.Add(Task.Run(() =>
+                 {
+                     KeyValuePair<string, string> newadd = ProcessDifferences(item, localDict);
+                     if (newadd.Key != null && newadd.Value != null)
+                     {
+                         diffDict.Add(newadd.Key, newadd.Value);
+                     }
+                 }));
             }
-            if (version > Properties.Settings.Default.Version)
+
+            await Task.WhenAll(diffTasks.ToArray()).ConfigureAwait(false);
+
+            List<Task> downloadTasks = new List<Task>();
+
+            foreach (var item in diffDict)
             {
-                Properties.Settings.Default.Version = version;
-                _ = Console.Out.WriteLineAsync("New modpack version found. Updating internal version counter.");
-            }
-            else
-            {
-                Console.Error.WriteLine("No new modpack version found.");
-            }
-            await Console.Out.FlushAsync();
-            Console.ReadLine();
-        }
-
-        async private static Task ConfirmGuid()
-        {
-            try
-            {
-                Guid Rguid = Guid.Parse(await DownloadTextFile(host + "guid.txt", 3));
-                if (!Rguid.Equals(Program.guid))
-                {
-                    Console.Error.WriteLine("You are using an outdated version of this downloader/launcher script. For more information, contact Alice.\nNo support is offered for this version. Press ENTER to run anyway.");
-                    Console.ReadLine();
-                }
-            }
-            catch (FormatException)
-            {
-                Console.WriteLine("Invalid GUID");
-            }
-            catch (System.ArgumentNullException)
-            {
-                Console.WriteLine("Unable to get GUID file.");
-            }
-        }
-
-        private static async Task ProcessMod(Mod mod, bool conf = false)
-        {
-                string etag = Barrel.Current.Get<string>(key: mod.Path);
-            if (File.Exists(mod.Path) && etag == null) {
-                var sha1 = await GetHashAsync<SHA1Managed>(File.OpenRead(mod.Path));
-                if (sha1 == mod.Sha1) {
-                    DownloadManager downloadManager = new DownloadManager(mod);
-                    await downloadManager.getETAG();
-                    downloadManager.WriteEtag(mod);
-                    etag = Barrel.Current.Get<string>(key: mod.Path);
-                    Console.WriteLine(mod.Path + " was added through sha1 hash.");
-
-                }
-            }
-                if (File.Exists(mod.Path) && etag != null)
-                {
-                    if (mod.Purge == true)
-                    {
-                        File.Delete(mod.Path);
-                    }
-
-                    await DownloadMod(mod, etag, conf);
-                }
-                else
-                {
-                    await DownloadMod(mod, conf: conf);
-                }
-                await Task.Delay(250);
-            
-        }
-
-        private static async Task DownloadMod(Mod mod, string ETAG = null, bool conf = false)
-        {
-            if (ETAG != null)
-            {
-                var headerRequest = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, mod.DownloadUrl));
-                if (headerRequest.Headers.ETag.ToString() == ETAG) { return; }
-            }
-            DownloadManager dm = new DownloadManager(mod);
-            if (conf == false)
-            {
-                await dm.Download();
-            }
-            else {
-                await dm.DownloadConf();
-            }
-            
-
-        }
-
-        public static async Task<string> GetHashAsync<T>(this Stream stream)
-    where T : HashAlgorithm, new()
-        {
-            StringBuilder sb;
-
-            using (var algo = new T())
-            {
-                var buffer = new byte[8192];
-                int bytesRead;
-
-                // compute the hash on 8KiB blocks
-                while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) != 0)
-                    algo.TransformBlock(buffer, 0, bytesRead, buffer, 0);
-                algo.TransformFinalBlock(buffer, 0, bytesRead);
-
-                // build the hash string
-                sb = new StringBuilder(algo.HashSize / 4);
-                foreach (var b in algo.Hash)
-                    sb.AppendFormat("{0:x2}", b);
-            }
-
-            return sb?.ToString();
-        }
-
-        private async static Task<string> DownloadTextFile(string v, int tries = 15)
-        {
-            for (int a = 0; a < tries; a++)
-            {
+                if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { Logger.Log("Empty file..").FireAndForget(); }
+                var uri = origRemoteFileList[item.Key];
                 try
                 {
-                    string responseBody = await client.GetStringAsync(v);
-                    return responseBody;
+                    await downloader.DownloadFileAsync(uri.ToString(), item.Key).ConfigureAwait(false);
                 }
-                catch (System.Net.Http.HttpRequestException e)
+                catch (System.Net.WebException e)
                 {
-                    _ = Console.Error.WriteLineAsync(string.Format("Error downloading {0}: {1}", v, e.Message));
-                    await Task.Delay(1000);
+                    if (e.Message == "The remote server returned an error: (404) Not Found.")
+                    {
+                        Logger.Log("Could not download " + uri + ": 404 not found.", LogType.ERROR).FireAndForget();
+                    }
+                    else { throw; }
+                    
                 }
+                
+
+
             }
-            return null;
+            
+
+            
+
+
+            //Stopping the closing
+            Logger.Log("Application done").FireAndForget();
+            Console.ReadKey();
         }
+
+        private static KeyValuePair<string, string> ProcessDifferences(KeyValuePair<string, string> item, Dictionary<string, string> localDict)
+        {
+            if (!localDict.ContainsKey(item.Key))
+            {
+                Logger.Log($"{item.Key} not found in localDict", LogType.DEBUG).FireAndForget();
+                return item;
+            }
+
+            if (localDict.TryGetValue(item.Key, out string value) == false)
+            {
+                Logger.Log($"Couldn't get value for {item.Key} in localDict.", LogType.DEBUG).FireAndForget();
+
+                return item;
+            }
+
+            if (NormalizePath(item.Value) != NormalizePath(value))
+            {
+                Logger.Log($"{NormalizePath(item.Value)} != {NormalizePath(value)}", LogType.DEBUG).FireAndForget();
+
+                return item;
+            }
+
+            return default;
+        }
+
+        private static Dictionary<string, string> GenerateLocalFileList()
+        {
+            Dictionary<string, string> results = new Dictionary<string, string>();
+            Logger.Log("Searching for local files.").FireAndForget();
+            
+            try
+            {
+                IEnumerable<string> count = Directory.EnumerateFiles(LocalPath, "*.*", SearchOption.AllDirectories);
+                publiccount = count.Count();
+                Parallel.ForEach(count, (result) =>
+                {
+                    
+                    string path = result.Remove(0, 9); //Remove ./profile from start of path.
+
+                    SHA1 sha1 = new SHA1();
+                    CSHash.Tools.Converter converter = new CSHash.Tools.Converter();
+
+                    byte[] hash = sha1.HashFromFile(result);
+
+                    string fullhash = converter.ConvertByteArrayToFullString(hash);
+
+                    //Logger.Log($"{fullhash} - {NormalizePath(result)}").FireAndForget();
+
+                    results.Add(NormalizePath(result), fullhash);
+                    
+                    finished++;
+                });
+            }
+            catch (System.IO.DirectoryNotFoundException)
+            {
+                Logger.Log("Directory didn't exist.", LogType.DEBUG).FireAndForget();
+                Directory.CreateDirectory(LocalPath);
+                
+
+            }
+
+            finished = publiccount;
+            Logger.Log("Returning " + results.Count + " local files.").FireAndForget();
+            return results;
+        }
+
+
+        [LightningBug.Polly.Retry.Retry(15)]
+        
+        private static async Task<Dictionary<string, string>> GetRemoteFilelistFromServer()
+        {
+            Logger.Log("Getting remote file list from server.").FireAndForget();
+            using var client = new HttpClient();
+            var request = await client.GetAsync(new Uri(host + "filelist.json")).ConfigureAwait(false);
+
+            string result = await request.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+            Dictionary<string, string> newFileList = new Dictionary<string, string>();
+            Logger.Log("Converting JSON to file list.").FireAndForget();
+            foreach (var item in JsonConvert.DeserializeObject<RemoteFileList>(result).fileList)
+            {
+                newFileList.Add(NormalizePath(item.Key), item.Value);
+                origRemoteFileList.Add(NormalizePath(item.Key), new Uri(host + item.Key.Remove(0, 10)));
+            }
+
+
+            Logger.Log("Returning remote files.").FireAndForget();
+            return newFileList;
+        }
+
+        public static string NormalizePath(string path)
+        {
+            return Path.GetFullPath(path);
+        }
+
     }
+
+
+
 }

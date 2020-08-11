@@ -34,5 +34,17 @@ namespace AutoDownloadModpack.Properties {
                 this["Version"] = value;
             }
         }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("00000000-0000-0000-0000-000000000000")]
+        public global::System.Guid uid {
+            get {
+                return ((global::System.Guid)(this["uid"]));
+            }
+            set {
+                this["uid"] = value;
+            }
+        }
     }
 }
