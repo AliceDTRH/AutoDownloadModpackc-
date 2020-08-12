@@ -24,6 +24,7 @@ namespace AutoDownloadModpack
 
 
         readonly static string location = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        //Just triggering codefactor
 
 
         private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>().WaitAndRetryForeverAsync(retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), (e, _) => {
