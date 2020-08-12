@@ -1,38 +1,36 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net.Http;
-using System.Text;
 using System.Threading.Tasks;
 using CSHash.Digests;
 using ResilientDownloadLib;
-using LightningBug.Polly;
 using Newtonsoft.Json;
 using Downloader;
 using System.Net;
 using System.Reflection;
-using System.Diagnostics;
 using Polly;
 
 namespace AutoDownloadModpack
 {
-    class Program
+    static class Program
     {
         
         private const string host = "https://alicedtrh.xyz/";
 
 
         readonly static string location = System.Reflection.Assembly.GetExecutingAssembly().Location;
-        //Just triggering codefactor
-
 
         private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>().WaitAndRetryForeverAsync(retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), (e, _) => {
             Logger.Log($"{e.GetType().Name}: {e.Message} - Retrying", LogType.INFO).FireAndForget();
             });
 
-        static readonly DownloadService downloader = new DownloadService(downloadOpt);
+        static readonly DownloadService downloader;
+
+        static Program() => downloader = new DownloadService(downloadOpt);
+
         private static Dictionary<string, Uri> origRemoteFileList = new Dictionary<string, Uri>();
+
         static readonly DownloadConfiguration downloadOpt = new DownloadConfiguration()
         {
             MaxTryAgainOnFailover = int.MaxValue, // the maximum number of times to fail.
@@ -64,9 +62,6 @@ namespace AutoDownloadModpack
             }
             //Stopping the closing
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-
             if (retries < 3)
             {
                 Logger.Log("All files were verified.").FireAndForget();
@@ -75,17 +70,18 @@ namespace AutoDownloadModpack
             else {
                 Console.ReadKey();
             }
-
+            await Logger.Fs.FlushAsync().ConfigureAwait(false);
+            Logger.Fs.Dispose();
 
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2008:Do not create tasks without passing a TaskScheduler", Justification = "<Pending>")]
         private static async Task<int> Run()
         {
-            {
-                Modpack modpack = new Modpack();
 
-                Dictionary<string, string> remoteDict = new Dictionary<string, string>();
+
+
+                Dictionary<string, string> remoteDict;
                 Dictionary<string, string> localDict = new Dictionary<string, string>();
 
                 Dictionary<string, string> diffDict = new Dictionary<string, string>();
@@ -118,8 +114,6 @@ namespace AutoDownloadModpack
 
                 await Task.WhenAll(diffTasks.ToArray()).ConfigureAwait(false);
 
-                List<Task> downloadTasks = new List<Task>();
-
                 foreach (KeyValuePair<string, string> item in diffDict)
                 {
                     if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { File.Create(item.Key).Dispose(); continue; }
@@ -148,7 +142,7 @@ namespace AutoDownloadModpack
                 return diffDict.Count;
 
 
-            }
+            
         }
 
         private static KeyValuePair<string, string> ProcessDifferences(KeyValuePair<string, string> item, Dictionary<string, string> localDict)
@@ -159,7 +153,7 @@ namespace AutoDownloadModpack
                 return item;
             }
 
-            if (localDict.TryGetValue(item.Key, out string value) == false)
+            if (!localDict.TryGetValue(item.Key, out string value))
             {
                 Logger.Log($"Couldn't get value for {item.Key} in localDict.", LogType.DEBUG).FireAndForget();
 

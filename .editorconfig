@@ -1,0 +1,7 @@
+﻿[*.cs]
+
+# CA1810: Initialize reference type static fields inline
+dotnet_diagnostic.CA1810.severity = silent
+
+# S3963: "static" fields should be initialized inline
+dotnet_diagnostic.S3963.severity = silent

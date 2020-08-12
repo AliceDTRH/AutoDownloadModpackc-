@@ -1,8 +1,5 @@
 ﻿using System;
 using System.IO;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Threading.Tasks;
 using Polly.Bulkhead;
 using Polly;
@@ -15,9 +12,7 @@ namespace ResilientDownloadLib
         public const string BR = "\n";
         static object lastMessage = "";
         static LogType lastLogType;
-        static int lastMessageamount = 0;
-        private static StreamWriter fs;
-
+        static int lastMessageamount;
         private static readonly AsyncBulkheadPolicy logQueue = Policy.BulkheadAsync(1, int.MaxValue);
 
         const string file = "./ADM.log";
@@ -26,6 +21,8 @@ namespace ResilientDownloadLib
         {
             return TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)) + TimeSpan.FromMilliseconds(rnd.Next(0, 1000));
         });
+
+        internal static StreamWriter Fs { get; set; }
 
         static async public Task Log(object message, LogType type = LogType.INFO) {
             await logQueue.ExecuteAsync(async () =>
@@ -42,13 +39,14 @@ namespace ResilientDownloadLib
                         
                     }
                 }
-                if (message.GetType() == typeof(string))
+                switch (message)
                 {
-                    await _Log($"[{DateTime.Now}] ({type}) {(string)message}", type).ConfigureAwait(false);
-                }
-                else
-                {
-                    await _Log($"[{DateTime.Now}] ({type}) {message.ToString()}", type).ConfigureAwait(false);
+                    case string _:
+                        await _Log($"[{DateTime.Now}] ({type}) {(string)message}", type).ConfigureAwait(false);
+                        break;
+                    default:
+                        await _Log($"[{DateTime.Now}] ({type}) {message}", type).ConfigureAwait(false);
+                        break;
                 }
                 lastMessage = message;
                 lastLogType = type;
@@ -56,8 +54,9 @@ namespace ResilientDownloadLib
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("AsyncUsage", "AsyncFixer03:Fire & forget async void methods", Justification = "We are using this to fire and forget with error handling.")]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "We just want to catch it.")]
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1030:Use events where appropriate", Justification = "Not appropriate.")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "We are using this to fire and forget with error handling.")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1030:Use events where appropriate", Justification = "We are using this to fire and forget with error handling.")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Bug", "S3168:\"async\" methods should not return \"void\"", Justification = "We are using this to fire and forget with error handling.")]
         static async public void FireAndForget(this Task task) {
             try
             {
@@ -73,11 +72,11 @@ namespace ResilientDownloadLib
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1305:Specify IFormatProvider", Justification = "Not important.")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "IDE1006:Naming Styles", Justification = "Internal function")]
         static private async Task _Log(string msg, LogType type) {
-
             await retryInfiniteNoLog.ExecuteAsync(async () =>
             {
-                if (fs == null) { fs = new StreamWriter(file, true); }
+                if (Fs == null) { Fs = new StreamWriter(file, true); }
 
                 if (type == LogType.FATAL) {
                     Console.ForegroundColor = ConsoleColor.Red;
@@ -86,20 +85,15 @@ namespace ResilientDownloadLib
                 }
                 if (type != LogType.DEBUG) { Console.WriteLine(msg); }
                 
-                await fs.WriteLineAsync(msg.ToString()).ConfigureAwait(false);
-                await fs.FlushAsync().ConfigureAwait(false);
+                await Fs.WriteLineAsync(msg.ToString()).ConfigureAwait(false);
+                await Fs.FlushAsync().ConfigureAwait(false);
                 
                 Console.ResetColor();
             }).ConfigureAwait(false);
-
-            
-        }
-
-        public static void Delete()
-        {
-            if (File.Exists(file)) { File.Delete(file); };
         }
     }
+
+
 
     public enum LogType
     {
