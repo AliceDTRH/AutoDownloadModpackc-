@@ -16,3 +16,4 @@ Notes:
 * The Modpack (selection of mods) has not been picked properly yet and will change significantly over time.
 * The Modpack will only launch if there is an internet connection. This will be changed in the future.
 * Please report any issues you run into.
+* At the moment this program only works using Windows. Let me know if you are interested in a Linux version.
