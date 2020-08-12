@@ -13,17 +13,24 @@ using Downloader;
 using System.Net;
 using System.Reflection;
 using System.Diagnostics;
+using Polly;
 
 namespace AutoDownloadModpack
 {
     class Program
     {
-        private const string LocalPath = "./profile";
+        
         private const string host = "https://alicedtrh.xyz/";
-        private static int finished;
-        private static int publiccount = 1000;
 
-        static  DownloadService downloader = new DownloadService(downloadOpt);
+
+        readonly static string location = System.Reflection.Assembly.GetExecutingAssembly().Location;
+
+
+        private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>().WaitAndRetryForeverAsync(retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), (e, _) => {
+            Logger.Log($"{e.GetType().Name}: {e.Message} - Retrying", LogType.INFO).FireAndForget();
+            });
+
+        static readonly DownloadService downloader = new DownloadService(downloadOpt);
         private static Dictionary<string, Uri> origRemoteFileList = new Dictionary<string, Uri>();
         static readonly DownloadConfiguration downloadOpt = new DownloadConfiguration()
         {
@@ -43,81 +50,104 @@ namespace AutoDownloadModpack
     }
         };
 
-        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2008:Do not create tasks without passing a TaskScheduler", Justification = "<Pending>")]
-        public async static Task Main()
+        
+        public static async Task Main()
         {
-            Modpack modpack = new Modpack();
-
-            Dictionary<string, string> remoteDict = new Dictionary<string, string>();
-            Dictionary<string, string> localDict = new Dictionary<string, string>();
-
-            Dictionary<string, string> diffDict = new Dictionary<string, string>();
-
-            Task<Dictionary<string, string>> remoteTask = Task.Run(GetRemoteFilelistFromServer);
-
-            List<Task> tasks = new List<Task>();
-
-            Task<Dictionary<string, string>> localTask = Task.Run(GenerateLocalFileList);
-            tasks.Add(remoteTask.ContinueWith(async (t) => { remoteDict = await t.ConfigureAwait(false); }));
-            tasks.Add(localTask.ContinueWith(async (t) => { localDict = await t.ConfigureAwait(false); }));
-            
-            while (finished < publiccount)
+            ushort retries = 0;
+            while (await Run().ConfigureAwait(false) > 0)
             {
-                
-                Logger.Log(finished + "/" + publiccount).FireAndForget();
-                await Task.Delay(100).ConfigureAwait(false);
+                ++retries;
+                if (retries > 3) { await Logger.Log("Too many retries, contact Alice for support!", LogType.FATAL).ConfigureAwait(false); break;   }
+                origRemoteFileList = new Dictionary<string, Uri>();
+                Logger.Log("Restarting application to check state.").FireAndForget();
             }
-            Logger.Log(finished + "/" + publiccount).FireAndForget();
-
-            await Task.WhenAll(tasks.ToArray()).ConfigureAwait(false);
-
-            List<Task> diffTasks = new List<Task>();
-
-            foreach (var item in remoteDict)
-            {
-                diffTasks.Add(Task.Run(() =>
-                 {
-                     KeyValuePair<string, string> newadd = ProcessDifferences(item, localDict);
-                     if (newadd.Key != null && newadd.Value != null)
-                     {
-                         diffDict.Add(newadd.Key, newadd.Value);
-                     }
-                 }));
-            }
-
-            await Task.WhenAll(diffTasks.ToArray()).ConfigureAwait(false);
-
-            List<Task> downloadTasks = new List<Task>();
-
-            foreach (var item in diffDict)
-            {
-                if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { Logger.Log("Empty file..").FireAndForget(); }
-                var uri = origRemoteFileList[item.Key];
-                try
-                {
-                    await downloader.DownloadFileAsync(uri.ToString(), item.Key).ConfigureAwait(false);
-                }
-                catch (System.Net.WebException e)
-                {
-                    if (e.Message == "The remote server returned an error: (404) Not Found.")
-                    {
-                        Logger.Log("Could not download " + uri + ": 404 not found.", LogType.ERROR).FireAndForget();
-                    }
-                    else { throw; }
-                    
-                }
-                
-
-
-            }
-            
-
-            
-
-
             //Stopping the closing
-            Logger.Log("Application done").FireAndForget();
-            Console.ReadKey();
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+
+            if (retries < 3)
+            {
+                Logger.Log("All files were verified.").FireAndForget();
+                Console.ReadKey();
+            }
+            else {
+                Console.ReadKey();
+            }
+
+
+        }
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2008:Do not create tasks without passing a TaskScheduler", Justification = "<Pending>")]
+        private static async Task<int> Run()
+        {
+            {
+                Modpack modpack = new Modpack();
+
+                Dictionary<string, string> remoteDict = new Dictionary<string, string>();
+                Dictionary<string, string> localDict = new Dictionary<string, string>();
+
+                Dictionary<string, string> diffDict = new Dictionary<string, string>();
+
+                Task<Dictionary<string, string>> remoteTask = Task.Run(GetRemoteFilelistFromServer);
+
+                List<Task> tasks = new List<Task>();
+
+                localDict = await remoteTask.ContinueWith((t) => { return GenerateLocalFileList(t.Result); }).ConfigureAwait(false);
+
+                remoteDict = await remoteTask.ConfigureAwait(false);
+
+
+
+                await Task.WhenAll(tasks.ToArray()).ConfigureAwait(false);
+
+                List<Task> diffTasks = new List<Task>();
+
+                foreach (var item in remoteDict)
+                {
+                    diffTasks.Add(Task.Run(() =>
+                    {
+                        KeyValuePair<string, string> newadd = ProcessDifferences(item, localDict);
+                        if (newadd.Key != null && newadd.Value != null)
+                        {
+                            diffDict.Add(newadd.Key, newadd.Value);
+                        }
+                    }));
+                }
+
+                await Task.WhenAll(diffTasks.ToArray()).ConfigureAwait(false);
+
+                List<Task> downloadTasks = new List<Task>();
+
+                foreach (KeyValuePair<string, string> item in diffDict)
+                {
+                    if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { File.Create(item.Key).Dispose(); continue; }
+                    var uri = origRemoteFileList[item.Key];
+                    try
+                    {
+                        Logger.Log($"Starting download for {uri}").FireAndForget();
+
+                        await RetryPolicy.ExecuteAsync(async () => { await downloader.DownloadFileAsync(uri.ToString(), item.Key).ConfigureAwait(false); }).ConfigureAwait(false);
+                        Logger.Log($"Download for {uri} finished.").FireAndForget();
+                    }
+                    catch (System.Net.WebException e)
+                    {
+                        if (e.Message == "The remote server returned an error: (404) Not Found.")
+                        {
+                            Logger.Log("Could not download " + uri + ": 404 not found.", LogType.ERROR).FireAndForget();
+                        }
+                        else { throw; }
+
+                    }
+
+
+
+                }
+
+                return diffDict.Count;
+
+
+            }
         }
 
         private static KeyValuePair<string, string> ProcessDifferences(KeyValuePair<string, string> item, Dictionary<string, string> localDict)
@@ -145,43 +175,25 @@ namespace AutoDownloadModpack
             return default;
         }
 
-        private static Dictionary<string, string> GenerateLocalFileList()
+        private static Dictionary<string, string> GenerateLocalFileList(Dictionary<string, string> remoteFileList)
         {
             Dictionary<string, string> results = new Dictionary<string, string>();
             Logger.Log("Searching for local files.").FireAndForget();
-            
-            try
-            {
-                IEnumerable<string> count = Directory.EnumerateFiles(LocalPath, "*.*", SearchOption.AllDirectories);
-                publiccount = count.Count();
-                Parallel.ForEach(count, (result) =>
-                {
-                    
-                    string path = result.Remove(0, 9); //Remove ./profile from start of path.
 
+            Parallel.ForEach(remoteFileList, (item) => {
+                if (File.Exists(NormalizePath(item.Key))) {
                     SHA1 sha1 = new SHA1();
                     CSHash.Tools.Converter converter = new CSHash.Tools.Converter();
 
-                    byte[] hash = sha1.HashFromFile(result);
+                    byte[] hash = sha1.HashFromFile(item.Key);
 
                     string fullhash = converter.ConvertByteArrayToFullString(hash);
 
-                    //Logger.Log($"{fullhash} - {NormalizePath(result)}").FireAndForget();
+                    results.Add(NormalizePath(item.Key), fullhash);
+                }
+            });
 
-                    results.Add(NormalizePath(result), fullhash);
-                    
-                    finished++;
-                });
-            }
-            catch (System.IO.DirectoryNotFoundException)
-            {
-                Logger.Log("Directory didn't exist.", LogType.DEBUG).FireAndForget();
-                Directory.CreateDirectory(LocalPath);
-                
-
-            }
-
-            finished = publiccount;
+            
             Logger.Log("Returning " + results.Count + " local files.").FireAndForget();
             return results;
         }
@@ -199,16 +211,55 @@ namespace AutoDownloadModpack
 
             Dictionary<string, string> newFileList = new Dictionary<string, string>();
             Logger.Log("Converting JSON to file list.").FireAndForget();
-            foreach (var item in JsonConvert.DeserializeObject<RemoteFileList>(result).fileList)
+            RemoteFileList remoteFileList = JsonConvert.DeserializeObject<RemoteFileList>(result);
+            foreach (var item in remoteFileList.fileList)
             {
+                if (!IsInRoot(item.Key)) { Logger.Log($"Path not in root: {item}. Not downloading file.", LogType.ERROR).FireAndForget(); continue; }
                 newFileList.Add(NormalizePath(item.Key), item.Value);
                 origRemoteFileList.Add(NormalizePath(item.Key), new Uri(host + item.Key.Remove(0, 10)));
             }
+
+            foreach (var item in remoteFileList.deleteFileList) {
+                DeleteLocalFile(item);
+            }
+
+            
 
 
             Logger.Log("Returning remote files.").FireAndForget();
             return newFileList;
         }
+
+        private static void DeleteLocalFile(string item)
+        {
+            string file = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(location), item.ToString()));
+
+            if (!IsInRoot(file)) {
+                Logger.Log($"Attempt to delete file {file} which is outside of root! Ignoring.", LogType.WARNING).FireAndForget();
+                return;
+            }
+
+            if (File.Exists(file) && !IsSymbolic(file))
+            {
+                Logger.Log("Deleting " + file).FireAndForget();
+                File.Delete(item);
+            }
+        }
+
+        private static bool IsInRoot(string file)
+        {
+            return Path.GetFullPath(file).StartsWith(Path.GetDirectoryName(location), StringComparison.OrdinalIgnoreCase);
+        }
+
+
+        //Technically catches any file with a reparsepoint. Good enough for our purposes.
+        private static bool IsSymbolic(string path)
+        {
+            FileInfo pathInfo = new FileInfo(path);
+            return pathInfo.Attributes.HasFlag(FileAttributes.ReparsePoint);
+        }
+
+
 
         public static string NormalizePath(string path)
         {
