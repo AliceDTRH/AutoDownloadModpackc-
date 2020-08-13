@@ -18,6 +18,7 @@
 * Please report any issues you run into.
 * At the moment this program only works using Windows. Let me know if you are interested in a Linux version.
 * I am not affiliated with the amazing, popular open-source Minecraft Launcher MultiMC.
+* All executables made by me can be verified at https://authenticate.codenotary.io/
 
 ### See also
 * https://github.com/MultiMC/MultiMC5/ - *A custom launcher for Minecraft that allows you to easily manage multiple installations of Minecraft at once*
