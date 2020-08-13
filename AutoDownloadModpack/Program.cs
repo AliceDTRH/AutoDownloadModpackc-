@@ -11,23 +11,17 @@ using System.Net;
 using System.Reflection;
 using Polly;
 
+
 namespace AutoDownloadModpack
 {
     static class Program
     {
-        
-        private const string host = "https://alicedtrh.xyz/";
 
+        private const string host = "https://alicedtrh.xyz/";
 
         readonly static string location = System.Reflection.Assembly.GetExecutingAssembly().Location;
 
-        private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>().WaitAndRetryForeverAsync(retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)), (e, _) => {
-            Logger.Log($"{e.GetType().Name}: {e.Message} - Retrying", LogType.INFO).FireAndForget();
-            });
-
-        static readonly DownloadService downloader;
-
-        static Program() => downloader = new DownloadService(downloadOpt);
+        private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>().WaitAndRetryAsync(100, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
 
         private static Dictionary<string, Uri> origRemoteFileList = new Dictionary<string, Uri>();
 
@@ -41,7 +35,7 @@ namespace AutoDownloadModpack
             RequestConfiguration = // config and customize request headers
     {
         Accept = "*/*",
-        UserAgent = $"ResilientDownloadLib/{Assembly.GetExecutingAssembly().GetName().Version.ToString(3)}",
+        UserAgent = $"ResilientDownloadLib/{Assembly.GetExecutingAssembly().GetName().Version}",
         ProtocolVersion = HttpVersion.Version11,
         AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
         KeepAlive = false,
@@ -49,14 +43,38 @@ namespace AutoDownloadModpack
     }
         };
 
-        
+        static readonly DownloadConfiguration downloadOptSmall = new DownloadConfiguration()
+        {
+            MaxTryAgainOnFailover = int.MaxValue, // the maximum number of times to fail.
+            ParallelDownload = false, // download parts of file as parallel or not default value is false
+            ChunkCount = 1, // file parts to download, default value is 1
+            Timeout = 1000, // timeout (millisecond) per stream block reader, default valuse is 1000
+            OnTheFlyDownload = true, // caching in-memory or not? default valuse is true
+            RequestConfiguration = // config and customize request headers
+    {
+        Accept = "*/*",
+        UserAgent = $"ResilientDownloadLib/{Assembly.GetExecutingAssembly().GetName().Version}",
+        ProtocolVersion = HttpVersion.Version11,
+        AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+        KeepAlive = false,
+        UseDefaultCredentials = false
+    }
+        };
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1303:Do not pass literals as localized parameters", Justification = "<Pending>")]
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "<Pending>")]
         public static async Task Main()
         {
+
+
+            FileStream lockFile = File.OpenWrite("lock");
+            CreateProfileDirectories();
+
             ushort retries = 0;
-            while (await Run().ConfigureAwait(false) > 0)
+            while (await Run() > 0)
             {
                 ++retries;
-                if (retries > 3) { await Logger.Log("Too many retries, contact Alice for support!", LogType.FATAL).ConfigureAwait(false); break;   }
+                if (retries > 3) { await Logger.Log("Too many retries, contact Alice for support!", LogType.FATAL); break; }
                 origRemoteFileList = new Dictionary<string, Uri>();
                 Logger.Log("Restarting application to check state.").FireAndForget();
             }
@@ -65,84 +83,123 @@ namespace AutoDownloadModpack
             if (retries < 3)
             {
                 Logger.Log("All files were verified.").FireAndForget();
-                Console.ReadKey();
+                if (!Console.IsOutputRedirected)
+                {
+                    Console.ReadKey();
+                }
             }
-            else {
-                Console.ReadKey();
+            else
+            {
+                if (!Console.IsOutputRedirected) { Console.ReadKey(); }
+                    
             }
-            await Logger.Fs.FlushAsync().ConfigureAwait(false);
-            Logger.Fs.Dispose();
 
+            
+
+            lockFile.Close();
+        }
+
+        private static void CreateProfileDirectories()
+        {
+                    if (!Directory.Exists("./mods") && IsInRoot("./mods"))
+                    {
+                        Directory.CreateDirectory("./mods");
+                    }
+                    if (!Directory.Exists("./config") && IsInRoot("./config"))
+                    {
+                        Directory.CreateDirectory("./config");
+                    }
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2008:Do not create tasks without passing a TaskScheduler", Justification = "<Pending>")]
         private static async Task<int> Run()
         {
+            Dictionary<string, string> remoteDict;
+            Dictionary<string, string> localDict = new Dictionary<string, string>();
 
+            Dictionary<string, string> diffDict = new Dictionary<string, string>();
 
+            Task<Dictionary<string, string>> remoteTask = Task.Run(GetRemoteFilelistFromServer);
 
-                Dictionary<string, string> remoteDict;
-                Dictionary<string, string> localDict = new Dictionary<string, string>();
+            List<Task> tasks = new List<Task>();
 
-                Dictionary<string, string> diffDict = new Dictionary<string, string>();
+            localDict = await remoteTask.ContinueWith((t) => { return GenerateLocalFileList(t.Result); });
 
-                Task<Dictionary<string, string>> remoteTask = Task.Run(GetRemoteFilelistFromServer);
+            remoteDict = await remoteTask;
 
-                List<Task> tasks = new List<Task>();
-
-                localDict = await remoteTask.ContinueWith((t) => { return GenerateLocalFileList(t.Result); }).ConfigureAwait(false);
-
-                remoteDict = await remoteTask.ConfigureAwait(false);
-
-
-
-                await Task.WhenAll(tasks.ToArray()).ConfigureAwait(false);
-
-                List<Task> diffTasks = new List<Task>();
-
-                foreach (var item in remoteDict)
-                {
-                    diffTasks.Add(Task.Run(() =>
-                    {
-                        KeyValuePair<string, string> newadd = ProcessDifferences(item, localDict);
-                        if (newadd.Key != null && newadd.Value != null)
-                        {
-                            diffDict.Add(newadd.Key, newadd.Value);
-                        }
-                    }));
-                }
-
-                await Task.WhenAll(diffTasks.ToArray()).ConfigureAwait(false);
-
-                foreach (KeyValuePair<string, string> item in diffDict)
-                {
-                    if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { File.Create(item.Key).Dispose(); continue; }
-                    var uri = origRemoteFileList[item.Key];
-                    try
-                    {
-                        Logger.Log($"Starting download for {uri}").FireAndForget();
-
-                        await RetryPolicy.ExecuteAsync(async () => { await downloader.DownloadFileAsync(uri.ToString(), item.Key).ConfigureAwait(false); }).ConfigureAwait(false);
-                        Logger.Log($"Download for {uri} finished.").FireAndForget();
-                    }
-                    catch (System.Net.WebException e)
-                    {
-                        if (e.Message == "The remote server returned an error: (404) Not Found.")
-                        {
-                            Logger.Log("Could not download " + uri + ": 404 not found.", LogType.ERROR).FireAndForget();
-                        }
-                        else { throw; }
-
-                    }
-
-
-
-                }
-
-                return diffDict.Count;
-
+            await Task.WhenAll(tasks.ToArray());
 
             
+            List<Task> diffTasks = new List<Task>();
+
+            foreach (var item in remoteDict)
+            {
+                diffTasks.Add(Task.Run(() =>
+                {
+                    KeyValuePair<string, string> newadd = ProcessDifferences(item, localDict);
+                    if (newadd.Key != null && newadd.Value != null)
+                    {
+                        diffDict.Add(newadd.Key, newadd.Value);
+                    }
+                }));
+            }
+
+            await Task.WhenAll(diffTasks.ToArray());
+
+            localDict.Clear();
+            remoteDict.Clear();
+
+            Parallel.ForEach(diffDict, new ParallelOptions { MaxDegreeOfParallelism = 4 }, (KeyValuePair<string, string> item) =>
+            {
+                if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { Logger.Log($"Not downloading empty file {item.Key}", LogType.DEBUG).FireAndForget(); File.Create(item.Key).Dispose(); return; }
+                var uri = origRemoteFileList[item.Key];
+
+#pragma warning disable AsyncFixer02 // Long-running or blocking operations inside an async method
+                DownloadItem(item, uri).Wait(); //Only works using Wait()
+#pragma warning restore AsyncFixer02 // Long-running or blocking operations inside an async method
+            });
+            
+            return diffDict.Count;
+        }
+
+        private static async Task DownloadItem(KeyValuePair<string, string> item, Uri uri)
+        {
+            try
+            {
+                Logger.Log($"Starting download for {uri}").FireAndForget();
+                bool isSmall = false;
+                using (var client = new HttpClient())
+                {
+                    HttpRequestMessage m = new HttpRequestMessage(HttpMethod.Head, uri);
+
+                    HttpResponseMessage resp = await client.SendAsync(m);
+
+                    if (resp.Content.Headers.ContentLength < 100) { isSmall = true; }
+
+                    m.Dispose();
+                }
+                
+                if (isSmall)
+                {
+                    DownloadService ds = new DownloadService(downloadOptSmall);
+                    await RetryPolicy.ExecuteAsync(async () => { await ds.DownloadFileAsync(uri.ToString(), item.Key); });
+                }
+                else
+                {
+                    await RetryPolicy.ExecuteAsync(async () => { await new DownloadService(downloadOpt).DownloadFileAsync(uri.ToString(), item.Key); });
+                }
+
+                Logger.Log($"Download for {uri} finished.").FireAndForget();
+            }
+            catch (System.Net.WebException e)
+            {
+                if (e.Message == "The remote server returned an error: (404) Not Found.")
+                {
+                    Logger.Log("Could not download " + uri + ": 404 not found.", LogType.ERROR).FireAndForget();
+                }
+                else { throw; }
+
+            }
         }
 
         private static KeyValuePair<string, string> ProcessDifferences(KeyValuePair<string, string> item, Dictionary<string, string> localDict)
@@ -163,7 +220,6 @@ namespace AutoDownloadModpack
             if (NormalizePath(item.Value) != NormalizePath(value))
             {
                 Logger.Log($"{NormalizePath(item.Value)} != {NormalizePath(value)}", LogType.DEBUG).FireAndForget();
-
                 return item;
             }
 
@@ -175,8 +231,10 @@ namespace AutoDownloadModpack
             Dictionary<string, string> results = new Dictionary<string, string>();
             Logger.Log("Searching for local files.").FireAndForget();
 
-            Parallel.ForEach(remoteFileList, (item) => {
-                if (File.Exists(NormalizePath(item.Key))) {
+            Parallel.ForEach(remoteFileList, (item) =>
+            {
+                if (File.Exists(NormalizePath(item.Key)))
+                {
                     SHA1 sha1 = new SHA1();
                     CSHash.Tools.Converter converter = new CSHash.Tools.Converter();
 
@@ -188,38 +246,33 @@ namespace AutoDownloadModpack
                 }
             });
 
-            
             Logger.Log("Returning " + results.Count + " local files.").FireAndForget();
             return results;
         }
 
-
-        [LightningBug.Polly.Retry.Retry(15)]
-        
         private static async Task<Dictionary<string, string>> GetRemoteFilelistFromServer()
         {
             Logger.Log("Getting remote file list from server.").FireAndForget();
             using var client = new HttpClient();
-            var request = await client.GetAsync(new Uri(host + "filelist.json")).ConfigureAwait(false);
+            var request = await client.GetAsync(new Uri(host + "filelist.json"));
 
-            string result = await request.Content.ReadAsStringAsync().ConfigureAwait(false);
+            string result = await request.Content.ReadAsStringAsync();
 
             Dictionary<string, string> newFileList = new Dictionary<string, string>();
             Logger.Log("Converting JSON to file list.").FireAndForget();
             RemoteFileList remoteFileList = JsonConvert.DeserializeObject<RemoteFileList>(result);
+            Logger.Log(remoteFileList, LogType.DEBUG).FireAndForget();
             foreach (var item in remoteFileList.fileList)
             {
                 if (!IsInRoot(item.Key)) { Logger.Log($"Path not in root: {item}. Not downloading file.", LogType.ERROR).FireAndForget(); continue; }
                 newFileList.Add(NormalizePath(item.Key), item.Value);
-                origRemoteFileList.Add(NormalizePath(item.Key), new Uri(host + item.Key.Remove(0, 10)));
+                origRemoteFileList.Add(NormalizePath(item.Key), new Uri(host + item.Key));
             }
 
-            foreach (var item in remoteFileList.deleteFileList) {
+            foreach (var item in remoteFileList.deleteFileList)
+            {
                 DeleteLocalFile(item);
             }
-
-            
-
 
             Logger.Log("Returning remote files.").FireAndForget();
             return newFileList;
@@ -229,7 +282,8 @@ namespace AutoDownloadModpack
         {
             string file = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(location), item.ToString()));
 
-            if (!IsInRoot(file)) {
+            if (!IsInRoot(file))
+            {
                 Logger.Log($"Attempt to delete file {file} which is outside of root! Ignoring.", LogType.WARNING).FireAndForget();
                 return;
             }
@@ -254,15 +308,10 @@ namespace AutoDownloadModpack
             return pathInfo.Attributes.HasFlag(FileAttributes.ReparsePoint);
         }
 
-
-
         public static string NormalizePath(string path)
         {
             return Path.GetFullPath(path);
         }
 
     }
-
-
-
 }

@@ -42,15 +42,15 @@ namespace ResilientDownloadLib
                 switch (message)
                 {
                     case string _:
-                        await _Log($"[{DateTime.Now}] ({type}) {(string)message}", type).ConfigureAwait(false);
+                        await _Log($"[{DateTime.Now}] ({type}) {(string)message}", type);
                         break;
                     default:
-                        await _Log($"[{DateTime.Now}] ({type}) {message}", type).ConfigureAwait(false);
+                        await _Log($"[{DateTime.Now}] ({type}) {message}", type);
                         break;
                 }
                 lastMessage = message;
                 lastLogType = type;
-            }).ConfigureAwait(false);
+            });
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("AsyncUsage", "AsyncFixer03:Fire & forget async void methods", Justification = "We are using this to fire and forget with error handling.")]
@@ -62,12 +62,12 @@ namespace ResilientDownloadLib
             {
                 if (task != null)
                 {
-                    await task.ConfigureAwait(false);
+                    await task;
                 }
             }
             catch (Exception e)
             {
-                await Console.Error.WriteLineAsync($"Error while writing to log: {e}").ConfigureAwait(false);
+                await Console.Error.WriteLineAsync($"Error while writing to log: {e}");
             }
         }
 
@@ -85,15 +85,13 @@ namespace ResilientDownloadLib
                 }
                 if (type != LogType.DEBUG) { Console.WriteLine(msg); }
                 
-                await Fs.WriteLineAsync(msg.ToString()).ConfigureAwait(false);
-                await Fs.FlushAsync().ConfigureAwait(false);
+                await Fs.WriteLineAsync(msg.ToString());
+                await Fs.FlushAsync();
                 
                 Console.ResetColor();
-            }).ConfigureAwait(false);
+            });
         }
     }
-
-
 
     public enum LogType
     {
