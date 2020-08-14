@@ -19,6 +19,7 @@
 * At the moment this program only works using Windows. Let me know if you are interested in a Linux version.
 * I am not affiliated with the amazing, popular open-source Minecraft Launcher MultiMC.
 * All executables made by me can be verified at https://authenticate.codenotary.io/
+* The compiled version of the modpack updater requires at least a 64 bits processor/cpu. This because most modpacks require over 4gb of ram anyway.
 
 ### See also
 * https://github.com/MultiMC/MultiMC5/ - *A custom launcher for Minecraft that allows you to easily manage multiple installations of Minecraft at once*
