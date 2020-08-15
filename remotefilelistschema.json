@@ -17,7 +17,7 @@
         "deleteFileList"
     ],
     "title": "The root schema",
-    "type": [],
+    "type": "object",
     "properties": {
         "fileList": {
             "default": {},
