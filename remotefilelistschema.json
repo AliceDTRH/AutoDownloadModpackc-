@@ -28,7 +28,7 @@
                     "./config/example_config.txt": "0f84598eedc132c9d27367bb587986ab9e4bef9b"
                 }
             ],
-            "minItems": 1,
+            "minProperties": 1,
             "title": "The fileList schema",
             "uniqueItems": true,
             "additionalProperties": true
@@ -37,6 +37,7 @@
             "$id": "#/properties/deleteFileList",
             "type": "array",
             "title": "The deleteFileList schema",
+            "minItems": 1,
             "description": "Files that need to be deleted on the client side. In case a mod gets removed.",
             "default": [],
             "examples": [
