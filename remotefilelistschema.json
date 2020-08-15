@@ -37,7 +37,7 @@
             "$id": "#/properties/deleteFileList",
             "type": "array",
             "title": "The deleteFileList schema",
-            "description": "Filed that need to be deleted on the client side. In case a mod gets removed.",
+            "description": "Files that need to be deleted on the client side. In case a mod gets removed.",
             "default": [],
             "examples": [
                 [
