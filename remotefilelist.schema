@@ -1,0 +1,54 @@
+{
+    "default": {},
+    "description": "The root schema comprises the entire JSON document.",
+    "examples": [
+        {
+            "fileList": {
+                "./mods/example_mod1.jar": "b27d7ade5a2adb42795e5e8163825b13ad16f735",
+                "./config/example_config.txt": "0f84598eedc132c9d27367bb587986ab9e4bef9b"
+            },
+            "deleteFileList": [
+                "./config/example.txt"
+            ]
+        }
+    ],
+    "required": [
+        "fileList",
+        "deleteFileList"
+    ],
+    "title": "The root schema",
+    "type": [],
+    "properties": {
+        "fileList": {
+            "default": {},
+            "description": "Files that need to be on the client side. Used for validation.",
+            "examples": [
+                {
+                    "./mods/example_mod1.jar": "b27d7ade5a2adb42795e5e8163825b13ad16f735",
+                    "./config/example_config.txt": "0f84598eedc132c9d27367bb587986ab9e4bef9b"
+                }
+            ],
+            "minItems": 1,
+            "title": "The fileList schema",
+            "uniqueItems": true,
+            "additionalProperties": true
+        },
+        "deleteFileList": {
+            "$id": "#/properties/deleteFileList",
+            "type": "array",
+            "title": "The deleteFileList schema",
+            "description": "Filed that need to be deleted on the client side. In case a mod gets removed.",
+            "default": [],
+            "examples": [
+                [
+                    "./config/example.txt"
+                ]
+            ],
+            "additionalItems": true,
+            "items": {
+                "$id": "#/properties/deleteFileList/items"
+            }
+        }
+    },
+    "additionalProperties": false
+}
