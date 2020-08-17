@@ -18,10 +18,10 @@ namespace AutoDownloadModpack
     {
 
         private const string host = "https://alicedtrh.xyz/";
-
+        private const string filelist = "filelist.php";
         readonly static string location = System.Reflection.Assembly.GetExecutingAssembly().Location;
 
-        private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>().WaitAndRetryAsync(100, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+        private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>((a) => { if (a.Message == "File size is invalid!") { Logger.Log("Error during download: " + a.Message).FireAndForget(); return false; } else { Logger.Log("Error during download: " + a.Message).FireAndForget(); return true; } }).WaitAndRetryAsync(10, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
 
         private static Dictionary<string, Uri> origRemoteFileList = new Dictionary<string, Uri>();
 
@@ -35,13 +35,18 @@ namespace AutoDownloadModpack
             RequestConfiguration = // config and customize request headers
     {
         Accept = "*/*",
-        UserAgent = $"ResilientDownloadLib/{Assembly.GetExecutingAssembly().GetName().Version}",
+        UserAgent = Version(),
         ProtocolVersion = HttpVersion.Version11,
         AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
         KeepAlive = false,
         UseDefaultCredentials = false
     }
         };
+
+        private static string Version()
+        {
+            return $"{Assembly.GetExecutingAssembly().GetName().Name}/{Assembly.GetExecutingAssembly().GetName().Version}";
+        }
 
         static readonly DownloadConfiguration downloadOptSmall = new DownloadConfiguration()
         {
@@ -53,7 +58,7 @@ namespace AutoDownloadModpack
             RequestConfiguration = // config and customize request headers
     {
         Accept = "*/*",
-        UserAgent = $"ResilientDownloadLib/{Assembly.GetExecutingAssembly().GetName().Version}",
+        UserAgent = Version(),
         ProtocolVersion = HttpVersion.Version11,
         AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
         KeepAlive = false,
@@ -91,24 +96,24 @@ namespace AutoDownloadModpack
             else
             {
                 if (!Console.IsOutputRedirected) { Console.ReadKey(); }
-                    
+
             }
 
-            
+
 
             lockFile.Close();
         }
 
         private static void CreateProfileDirectories()
         {
-                    if (!Directory.Exists("./mods") && IsInRoot("./mods"))
-                    {
-                        Directory.CreateDirectory("./mods");
-                    }
-                    if (!Directory.Exists("./config") && IsInRoot("./config"))
-                    {
-                        Directory.CreateDirectory("./config");
-                    }
+            if (!Directory.Exists("./mods") && IsInRoot("./mods"))
+            {
+                Directory.CreateDirectory("./mods");
+            }
+            if (!Directory.Exists("./config") && IsInRoot("./config"))
+            {
+                Directory.CreateDirectory("./config");
+            }
         }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2008:Do not create tasks without passing a TaskScheduler", Justification = "<Pending>")]
@@ -129,7 +134,7 @@ namespace AutoDownloadModpack
 
             await Task.WhenAll(tasks.ToArray());
 
-            
+
             List<Task> diffTasks = new List<Task>();
 
             foreach (var item in remoteDict)
@@ -158,7 +163,7 @@ namespace AutoDownloadModpack
                 DownloadItem(item, uri).Wait(); //Only works using Wait()
 #pragma warning restore AsyncFixer02 // Long-running or blocking operations inside an async method
             });
-            
+
             return diffDict.Count;
         }
 
@@ -167,6 +172,7 @@ namespace AutoDownloadModpack
             try
             {
                 Logger.Log($"Starting download for {uri}").FireAndForget();
+
                 bool isSmall = false;
                 using (var client = new HttpClient())
                 {
@@ -176,18 +182,34 @@ namespace AutoDownloadModpack
 
                     if (resp.Content.Headers.ContentLength < 100) { isSmall = true; }
 
+                    if (resp.Content.Headers.ContentType.ToString() == "text/plain" || resp.Content.Headers.ContentType.ToString() == "text/json")
+                    {
+                        isSmall = true;
+                    }
+
                     m.Dispose();
                 }
-                
-                if (isSmall)
+
+
+
+                Directory.CreateDirectory(Path.GetDirectoryName(NormalizePath(item.Key)));
+                try
                 {
-                    DownloadService ds = new DownloadService(downloadOptSmall);
-                    await RetryPolicy.ExecuteAsync(async () => { await ds.DownloadFileAsync(uri.ToString(), item.Key); });
+                    if (isSmall)
+                    {
+                        DownloadService ds = new DownloadService(downloadOptSmall);
+                        await RetryPolicy.ExecuteAsync(async () => { await ds.DownloadFileAsync(uri.ToString(), item.Key); });
+                    }
+                    else
+                    {
+                        await RetryPolicy.ExecuteAsync(async () => { await new DownloadService(downloadOpt).DownloadFileAsync(uri.ToString(), item.Key); });
+                    }
                 }
-                else
+                catch (System.IO.InvalidDataException)
                 {
-                    await RetryPolicy.ExecuteAsync(async () => { await new DownloadService(downloadOpt).DownloadFileAsync(uri.ToString(), item.Key); });
+                    await RetryPolicy.ExecuteAsync(async () => { await DownloadManually(uri, item.Key); });
                 }
+
 
                 Logger.Log($"Download for {uri} finished.").FireAndForget();
             }
@@ -200,6 +222,15 @@ namespace AutoDownloadModpack
                 else { throw; }
 
             }
+        }
+
+        private static async Task DownloadManually(Uri uri, string path)
+        {
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Add("User-Agent", Version());
+            var request = await client.GetAsync(uri, HttpCompletionOption.ResponseContentRead);
+            request.EnsureSuccessStatusCode();
+            File.WriteAllBytes(path, await request.Content.ReadAsByteArrayAsync());
         }
 
         private static KeyValuePair<string, string> ProcessDifferences(KeyValuePair<string, string> item, Dictionary<string, string> localDict)
@@ -247,6 +278,7 @@ namespace AutoDownloadModpack
             });
 
             Logger.Log("Returning " + results.Count + " local files.").FireAndForget();
+            Logger.Log(results, LogType.DEBUG).FireAndForget();
             return results;
         }
 
@@ -254,12 +286,14 @@ namespace AutoDownloadModpack
         {
             Logger.Log("Getting remote file list from server.").FireAndForget();
             using var client = new HttpClient();
-            var request = await client.GetAsync(new Uri(host + "filelist.json"));
+            client.DefaultRequestHeaders.Add("User-Agent", Version());
+            var request = await client.GetAsync(new Uri(host + filelist));
 
             string result = await request.Content.ReadAsStringAsync();
 
             Dictionary<string, string> newFileList = new Dictionary<string, string>();
             Logger.Log("Converting JSON to file list.").FireAndForget();
+            Logger.Log(result, LogType.DEBUG).FireAndForget();
             RemoteFileList remoteFileList = JsonConvert.DeserializeObject<RemoteFileList>(result);
             Logger.Log(remoteFileList, LogType.DEBUG).FireAndForget();
             foreach (var item in remoteFileList.fileList)
@@ -288,7 +322,7 @@ namespace AutoDownloadModpack
                 return;
             }
 
-            if (File.Exists(file) && !IsSymbolic(file))
+            if (File.Exists(file))
             {
                 Logger.Log("Deleting " + file).FireAndForget();
                 File.Delete(item);
@@ -298,14 +332,6 @@ namespace AutoDownloadModpack
         private static bool IsInRoot(string file)
         {
             return Path.GetFullPath(file).StartsWith(Path.GetDirectoryName(location), StringComparison.OrdinalIgnoreCase);
-        }
-
-
-        //Technically catches any file with a reparsepoint. Good enough for our purposes.
-        private static bool IsSymbolic(string path)
-        {
-            FileInfo pathInfo = new FileInfo(path);
-            return pathInfo.Attributes.HasFlag(FileAttributes.ReparsePoint);
         }
 
         public static string NormalizePath(string path)
