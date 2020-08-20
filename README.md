@@ -16,7 +16,7 @@
 * The Modpack (selection of mods) has not been picked properly yet and will change significantly over time.
 * The Modpack will only launch if there is an internet connection. This will be changed in the future.
 * Please report any issues you run into.
-* At the moment this program only works using Windows. Let me know if you are interested in a Linux version.
+* The current version is only compiled for Windows, but compiling it cross-platform for Linux does not seem like a lot of work so let me know if you're interested in that.
 * I am not affiliated with the amazing, popular open-source Minecraft Launcher MultiMC.
 * All executables made by me can be verified at https://authenticate.codenotary.io/
 * The compiled version of the modpack updater requires at least a 64 bits processor/cpu. This because most modpacks require over 4gb of ram anyway.
