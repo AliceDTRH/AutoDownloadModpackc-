@@ -11,21 +11,26 @@ using System.Net;
 using System.Reflection;
 using Polly;
 
-
 namespace AutoDownloadModpack
 {
-    static class Program
+    internal static class Program
     {
-
         private const string host = "https://alicedtrh.xyz/";
         private const string filelist = "filelist.php";
-        readonly static string location = System.Reflection.Assembly.GetExecutingAssembly().Location;
+        private static readonly string location = System.Reflection.Assembly.GetExecutingAssembly().Location;
 
-        private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>((a) => { if (a.Message == "File size is invalid!") { Logger.Log("Error during download: " + a.Message).FireAndForget(); return false; } else { Logger.Log("Error during download: " + a.Message).FireAndForget(); return true; } }).WaitAndRetryAsync(10, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+        private static readonly AsyncPolicy RetryPolicy = Policy.Handle<Exception>((a) =>
+        {
+            if (a.Message == "File size is invalid!")
+            {
+                Logger.Log("Error during download: " + a.Message).FireAndForget(); return false; //Workaround might no longer be needed due to c54d8c6
+            }
+            else { Logger.Log("Error during download: " + a.Message).FireAndForget(); return true; }
+        }).WaitAndRetryAsync(10, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
 
         private static Dictionary<string, Uri> origRemoteFileList = new Dictionary<string, Uri>();
 
-        static readonly DownloadConfiguration downloadOpt = new DownloadConfiguration()
+        private static readonly DownloadConfiguration downloadOpt = new DownloadConfiguration()
         {
             MaxTryAgainOnFailover = int.MaxValue, // the maximum number of times to fail.
             ParallelDownload = true, // download parts of file as parallel or not default value is false
@@ -48,7 +53,7 @@ namespace AutoDownloadModpack
             return $"{Assembly.GetExecutingAssembly().GetName().Name}/{Assembly.GetExecutingAssembly().GetName().Version}";
         }
 
-        static readonly DownloadConfiguration downloadOptSmall = new DownloadConfiguration()
+        private static readonly DownloadConfiguration downloadOptSmall = new DownloadConfiguration()
         {
             MaxTryAgainOnFailover = int.MaxValue, // the maximum number of times to fail.
             ParallelDownload = false, // download parts of file as parallel or not default value is false
@@ -70,8 +75,6 @@ namespace AutoDownloadModpack
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "<Pending>")]
         public static async Task Main()
         {
-
-
             FileStream lockFile = File.OpenWrite("lock");
             CreateProfileDirectories();
 
@@ -96,10 +99,7 @@ namespace AutoDownloadModpack
             else
             {
                 if (!Console.IsOutputRedirected) { Console.ReadKey(); }
-
             }
-
-
 
             lockFile.Close();
         }
@@ -133,7 +133,6 @@ namespace AutoDownloadModpack
             remoteDict = await remoteTask;
 
             await Task.WhenAll(tasks.ToArray());
-
 
             List<Task> diffTasks = new List<Task>();
 
@@ -190,8 +189,6 @@ namespace AutoDownloadModpack
                     m.Dispose();
                 }
 
-
-
                 Directory.CreateDirectory(Path.GetDirectoryName(NormalizePath(item.Key)));
                 try
                 {
@@ -210,7 +207,6 @@ namespace AutoDownloadModpack
                     await RetryPolicy.ExecuteAsync(async () => { await DownloadManually(uri, item.Key); });
                 }
 
-
                 Logger.Log($"Download for {uri} finished.").FireAndForget();
             }
             catch (System.Net.WebException e)
@@ -220,7 +216,6 @@ namespace AutoDownloadModpack
                     Logger.Log("Could not download " + uri + ": 404 not found.", LogType.ERROR).FireAndForget();
                 }
                 else { throw; }
-
             }
         }
 
@@ -338,6 +333,5 @@ namespace AutoDownloadModpack
         {
             return Path.GetFullPath(path);
         }
-
     }
 }
