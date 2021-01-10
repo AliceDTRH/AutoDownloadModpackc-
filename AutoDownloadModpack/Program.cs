@@ -155,7 +155,7 @@ namespace AutoDownloadModpack
 
             Parallel.ForEach(diffDict, new ParallelOptions { MaxDegreeOfParallelism = 4 }, (KeyValuePair<string, string> item) =>
             {
-                if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { Logger.Log($"Not downloading empty file {item.Key}", LogType.DEBUG).FireAndForget(); File.Create(item.Key).Dispose(); return; }
+                if (item.Value == "da39a3ee5e6b4b0d3255bfef95601890afd80709") { Logger.Log($"Not downloading empty file {item.Key}", LogType.DEBUG).FireAndForget(); File.Create(item.Key).Dispose(); return; } //DevSkim: ignore DS173237
                 var uri = origRemoteFileList[item.Key];
 
 #pragma warning disable AsyncFixer02 // Long-running or blocking operations inside an async method
@@ -181,7 +181,7 @@ namespace AutoDownloadModpack
 
                     if (resp.Content.Headers.ContentLength < 100) { isSmall = true; }
 
-                    if (resp.Content.Headers.ContentType.ToString() == "text/plain" || resp.Content.Headers.ContentType.ToString() == "text/json")
+                    if (resp.Content.Headers.ContentType != null && (resp.Content.Headers.ContentType.ToString() == "text/plain" || resp.Content.Headers.ContentType.ToString() == "text/json"))
                     {
                         isSmall = true;
                     }
