@@ -1,0 +1,22 @@
+version: 2
+updates:
+- package-ecosystem: nuget
+  directory: "/"
+  schedule:
+    interval: daily
+    time: "18:00"
+    timezone: Europe/Amsterdam
+  open-pull-requests-limit: 10
+  assignees:
+  - AliceDTRH
+  ignore:
+  - dependency-name: Downloader
+    versions:
+    - ">= 2.a, < 3"
+  - dependency-name: Microsoft.NETCore.Platforms
+    versions:
+    - 5.0.0
+    - 5.0.1
+  - dependency-name: System.Text.Json
+    versions:
+    - 5.0.1
